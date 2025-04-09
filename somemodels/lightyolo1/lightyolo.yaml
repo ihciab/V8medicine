@@ -1,0 +1,47 @@
+# 改进后的YAML配置（基于原网络优化）
+# Parameters
+# 改进后的YAML配置（基于原网络优化）
+# YOLOv8-GhostNet with BiFPN-Lite and CARAFE
+# Parameters
+nc: 1 # number of classes
+
+scales:
+  n: [0.33, 0.35, 512]  # 调整宽度因子保留更多特征
+anchors: [[3,4,5,6,7,8], [9,10,12,14,15,18]]  # 仅保留P3/P4对应锚框
+
+# Backbone
+backbone:
+  # [from, repeats, module, args]                                     512
+  - [-1, 1, Conv, [64, 3, 1]]        # 0-P1/2 (调整stride为1保留细节)   256
+  - [-1, 1, GhostConv, [128, 3, 2]]  # 1-P2/4                       256
+  - [-1, 3, C3Ghost, [128]]            #2
+
+  - [-1, 1, ECA, [128]]                # 3-添加通道+空间注意力
+  - [-1, 1, GhostConv, [256, 3, 2]]  # 4-P3/8   #256out          128
+  - [-1, 3, C3Ghost, [256]]         #5                         128
+
+  - [-1, 1, GhostConv, [512, 3, 1]]  # 6-保持高分辨率  out64
+  - [-1, 1, GhostConv, [512, 3, 2]]  # 7-P4/16       32
+  - [-1, 3, C3Ghost, [512]]         #8
+
+  - [-1, 1, SPPF, [512]]   #9
+# Head
+head:
+  # ----- 上采样路径 -----
+  - [-1, 1, nn.Upsample, [None, 1, "nearest"]]#10      64
+  - [[-1, 8], 1, BiFPN_Concat2, [1]]#11
+  - [-1, 3, C3Ghost, [256]]#12
+
+  - [-1, 1, CARAFE, [3,5]]           # 13
+  - [[-1, 5], 1, Concat, [1]]        #14
+  - [-1, 3, C3Ghost, [128]]          #15
+  - [-1, 1, ECA, [128]]              # 16-P2检测层
+
+  # ----- 下采样路径 -----
+  - [-1, 1, GhostConv, [128, 3, 2]]  #17
+  - [[-1, 13], 1, Concat, [1]]       #18
+  - [-1, 3, C3Ghost, [256]]          #19
+
+
+  # 检测层
+  - [[17, 20, 10], 1, Detect, [nc]]  # 启用解耦头

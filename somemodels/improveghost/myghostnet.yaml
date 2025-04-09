@@ -1,0 +1,60 @@
+# Parameters
+nc: 1 # number of classes
+scales: # model compound scaling constants, i.e. 'model=yolov8n.yaml' will call yolov8.yaml with scale 'n'
+  # [depth, width, max_channels]
+  n: [0.33, 0.35, 1024] # YOLOv8n-ghost summary: 403 layers,  1865316 parameters,  1865300 gradients,   5.8 GFLOPs
+  s: [0.33, 0.50, 1024] # YOLOv8s-ghost summary: 403 layers,  5960072 parameters,  5960056 gradients,  16.4 GFLOPs
+  m: [0.67, 0.75, 768] # YOLOv8m-ghost summary: 603 layers, 10336312 parameters, 10336296 gradients,  32.7 GFLOPs
+  l: [1.00, 1.00, 512] # YOLOv8l-ghost summary: 803 layers, 14277872 parameters, 14277856 gradients,  53.7 GFLOPs
+  x: [1.00, 1.25, 512] # YOLOv8x-ghost summary: 803 layers, 22229308 parameters, 22229292 gradients,  83.3 GFLOPs
+
+# YOLOv8.0n head with enhanced feature fusion and attention
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [64, 3, 2]]        # 0-P1/2
+  - [-1, 1, GhostConv, [128, 3, 2]]  # 1-P2/4
+  - [-1, 3, C3Ghost, [128]]          # 2
+  - [-1, 1, CBAM, [128,3]]                # 3-添加通道+空间注意力
+  - [-1, 1, GhostConv, [256, 3, 2]]  # 4-P3/8
+  - [-1, 6, C3Ghost, [256]]          # 5
+  - [-1, 1, GhostConv, [512, 3, 2]]  # 6-P4/16
+  - [-1, 6, C3Ghost, [512]]          # 7
+  - [-1, 1, GhostConv, [1024, 3, 2]] # 8-P5/32
+  - [-1, 3, C3Ghost, [1024]]         # 9
+  - [-1, 1, SPPFCSPC, [1024]]         # 10
+
+# Head with BiFPN-Lite and CARAFE
+head:
+  # ---------------------- P5 -> P4 ----------------------
+  - [-1, 1, CARAFE, [3,5]]           # 11     #参数3 5 7 选 可以作为工作量
+  - [[-1, 7], 1, BiFPN_Concat2, [1]]        # 12 拼接Backbone的P4层（第7层）
+
+  - [-1, 3, C3Ghost, [512]]          # 13
+
+  # ---------------------- P4 -> P3 ----------------------
+  - [-1, 1, CARAFE, [3,5]]           # 14
+  - [[-1, 5], 1, Concat, [1]]        # 15 拼接Backbone的P3层（第5层）
+  - [-1, 1, MSAA, []]                # 16-添加通道+空间注意力
+  - [ -1, 3, C2f_OD, [ 256 ] ]          # 17 (P3/8)
+
+  # ---------------------- P3 -> P4 ----------------------
+  - [-1, 1, GhostConv, [256, 3, 2]]  # 18 下采样
+  - [[-1, 13], 1, Concat, [1]]        # 19 拼接Backbone的P4层（第7层）
+  - [-1, 3, C2f_OD, [512]]          # 20 (P4/16)
+
+  # ---------------------- P4 -> P5 ----------------------
+  - [-1, 1, GhostConv, [512, 3, 2]]  # 21 下采样
+  - [[-1, 10], 1, Concat, [1]]       # 22 拼接Backbone的P5层（第10层）
+  - [-1, 3, C3Ghost, [1024]]         # 23 (P5/32)
+
+  # ---------------------- Detect Layer ----------------------
+  - [[17, 20, 23], 1, Detect, [nc]]  # 25 检测头（P3, P4, P5）
+
+# Anchors
+anchors: [[5,6, 8,14, 12,18]]  # 小目标专用锚框
+loss:
+    iou: nwd  # Normalized Wasserstein Distance for better small object detection
+    cls: focal  # Focal Loss for class imbalance
+    box: 0.7  # Adjust box loss weight
+
+  # Data augmentation for powder particles
