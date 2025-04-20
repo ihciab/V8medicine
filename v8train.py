@@ -12,7 +12,7 @@ if __name__ == '__main__':
     #model = YOLO("testlight.yaml", verbose=True)
     #model.train(data="medicine.yaml",resume=False,workers=0,epochs=15,batch=4)
 
-    model = YOLO('./somemodels/distillnet/best.pt')
+    model = YOLO('./somemodels/mydistillnet/best.pt')
     print(model.info(detailed=True))
     #print(model.device)
 
