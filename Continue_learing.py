@@ -195,18 +195,23 @@ def train_continue(model, new_data_path, old_model=None, reg_lambda=0.5, epochs=
         reg_lambda: 正则化强度
         epochs: 训练轮次
     """
+    # 确保训练器存在并初始化
     if not hasattr(model, 'trainer') or model.trainer is None:
-        # 从模型配置中重建训练器
         task = model.overrides.get('task', 'detect')
-        model.trainer = TASK_MAP[task]['trainer']
-        overrides=model.overrides,
-        _callbacks=getattr(model, 'callbacks', None)
-
-
+        model.trainer = TASK_MAP[task]['trainer'](
+            overrides=model.overrides,
+            _callbacks=getattr(model, 'callbacks', None)
+        )
+    if hasattr(model.trainer, 'criterion'):
+        model.trainer.criterion = model.trainer.criterion.to('cuda:0')  # 强制移动到 GPU
     # 创建混合数据集
-    cl_trainer = ContinualLearning(model.overrides['data'])
-    cl_trainer.add_new_data(new_data_path)
-    combined_cfg = cl_trainer.get_combined_data()
+    #cl_trainer = ContinualLearning(model.overrides['data'])
+    #cl_trainer.add_new_data(new_data_path)
+    #combined_cfg = cl_trainer.get_combined_data()
+
+    # 获取原始损失函数（通过模型本身获取）
+    #original_compute_loss = model.model.compute_loss
+
     # 配置混合数据集
     # combined_cfg = {
     #     'train': [model.overrides['data']['train'], new_data_path],
@@ -215,53 +220,30 @@ def train_continue(model, new_data_path, old_model=None, reg_lambda=0.5, epochs=
     # }
 
     # 配置训练参数
-    train_args = {
-        'data': combined_cfg,
-        'epochs': epochs,
-        'imgsz': model.overrides['imgsz'],
-        #'batch': model.overrides['batch'],
-        'batch': 4,
-        'name': f'prune-continue-{len(cl_trainer.data_buffer)}'
-    }
+        # 配置训练参数
+        train_args = {
+            'data': 'newdata.yaml',
+            'epochs': epochs,
+            'imgsz': model.overrides['imgsz'],
+            'batch': model.overrides['batch'],
+            'name': f'prune-continue-{Path(new_data_path).stem}',
+            'exist_ok': True  # 允许覆盖现有结果
+        }
+    # 知识蒸馏逻辑
+    model.trainer.pruning = True
+    model.trainer.model = model.model
 
-    # 知识蒸馏正则化
-    if old_model is not None:
-        original_criterion = model.trainer.criterion
-        old_model = old_model.freeze()
-
-        def new_criterion(preds, batch):
-            # 原始检测损失
-            loss, loss_items = original_criterion(preds, batch)
-
-            # 知识蒸馏损失
-            with torch.no_grad():
-                teacher_preds = old_model(batch['img'])
-
-            # 分类头KL散度
-            cls_loss = F.kl_div(
-                F.log_softmax(preds[1][..., 4:], dim=-1),
-                F.softmax(teacher_preds[1][..., 4:], dim=-1),
-                reduction='batchmean'
-            )
-
-            # 回归头MSE
-            box_loss = F.mse_loss(preds[0], teacher_preds[0])
-
-            # 总损失
-            total_loss = loss + reg_lambda * (cls_loss + box_loss)
-
-            # 记录指标
-            loss_items.update({
-                'kd/cls': cls_loss.item(),
-                'kd/box': box_loss.item()
-            })
-            return total_loss, loss_items
-
-        model.trainer.criterion = new_criterion
-
+    # replace some functions to disable half precision saving
+    model.trainer.save_model = save_model_v2.__get__(model.trainer)
+    model.trainer.final_eval = final_eval_v2.__get__(model.trainer)
     # 执行训练
-    model.train(**train_args)
-    return model
+    model.trainer.train()
+
+    # 恢复原始损失函数（重要！）
+    if RANK in (-1, 0):
+        model.model, _ = attempt_load_one_weight(str(model.trainer.best))
+        model.overrides = model.model.args
+        model.metrics = getattr(model.trainer.validator, 'metrics', None)
 def save_pruning_performance_graph(x, y1, y2, y3):
     """
     Draw performance change graph
@@ -617,7 +599,7 @@ def prune(args):
     # load trained yolov8 model
     model = YOLO(args.model)
     model.__setattr__("train_v2", train_v2.__get__(model))
-
+    #model.__setattr__("train_continue", train_continue.__get__(model))
     # 初始化持续学习管理器
     cl_manager = ContinualLearning(base_data_path=args.data)
     original_model = deepcopy(model.model)
@@ -703,15 +685,14 @@ def prune(args):
             param.requires_grad = True
         pruning_cfg['name'] = f"step_{i}_finetune"
         pruning_cfg['batch'] = batch_size  # restore batch size
-        #model.train_v2(pruning=True, **pruning_cfg)
-        # 持续训练步骤
-        model = train_continue(
+        train_continue(
             model=model,
             new_data_path=args.new_data,
             old_model=original_model if i == 0 else model.model,
             reg_lambda=args.reg_lambda * (0.8 ** i),
-            epochs=20
-        )
+            epochs=2 )
+        # 持续训练步骤
+        #model.train_v2(pruning=True, **pruning_cfg)
 
         # post fine-tuning validation
         # 更新数据缓冲区

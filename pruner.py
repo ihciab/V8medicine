@@ -427,7 +427,7 @@ def prune(args):
             param.requires_grad = True
         pruning_cfg['name'] = f"step_{i}_finetune"
         pruning_cfg['batch'] = batch_size  # restore batch size
-        #model.train_v2(pruning=True, **pruning_cfg)
+        model.train_v2(pruning=True, **pruning_cfg)
         param_dict['teacher_kd_layers'] = '19'
         param_dict['student_kd_layers'] = '19'
         distillmodel = DetectionDistiller(overrides=param_dict,model=model.model)
